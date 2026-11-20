@@ -1,0 +1,8 @@
+name_prefix       = "nvidia-vmseries-poc"
+asg_name          = "nvidia-vmseries-gwlb-asg"
+auth_code         = ""     # or "D1234567"; must be dedicated to this ASG
+reconcile_dry_run = true   # flip to false once orphan detection is validated
+alert_emails      = ["you@example.com"]
+tags = {
+  project = "nvidia-vmseries-autoscale-poc"
+}

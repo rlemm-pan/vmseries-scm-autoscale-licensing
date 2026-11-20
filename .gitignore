@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+**/.terraform/
+**/.terraform.lock.hcl
+**/build/
+**/*.tfstate*
+**/terraform.tfvars
+postman/poc.env.json
+api-creds.json
+.DS_Store
+.env
+*.zip

@@ -1,0 +1,16 @@
+{
+  "_comment": "Input for `cli scm-setup`. Idempotent by name: existing objects are reported and left unchanged. 'parent' is the SCM name of the NGFW root folder ('All Firewalls' in the UI) - confirm with `cli scm-check`. Variable names get a leading '$' if missing. Snippet contents (rules, zones, routing) are not created here; build them in SCM or with the Terraform scm provider.",
+  "parent": "ngfw-shared",
+  "snippets": [
+    {"name": "AWS-GWLB-Network", "description": "GWLB interfaces, zones, routing for VM-Series in the NVIDIA ASG"}
+  ],
+  "folders": [
+    {"name": "AWS-NVIDIA-GWLB", "description": "VM-Series in the NVIDIA AWS ASG (bootstrap dgname)", "snippets": ["AWS-GWLB-Network"]},
+    {"name": "Decommissioned", "description": "Parking folder for scaled-in VM-Series (no public device-delete API)"}
+  ],
+  "variables": [
+    {"name": "$aws-vpc-cidr", "type": "ip-netmask", "value": "10.0.0.0/16", "folder": "AWS-NVIDIA-GWLB",
+     "description": "Placeholder - set to the security VPC CIDR"}
+  ],
+  "push_folders": ["AWS-NVIDIA-GWLB"]
+}

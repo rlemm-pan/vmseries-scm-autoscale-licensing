@@ -1,0 +1,11 @@
+{
+  "_comment": "Placeholder values. 16 vCPU flex is roughly a VM-700. Set firewall_quantity to the ASG max_size. Confirm the subscription codes against NVIDIA's current VM-700 entitlements.",
+  "credit_pool_id": 0,
+  "name": "nvidia-aws-gwlb-asg",
+  "type": "VM",
+  "firewall_quantity": 4,
+  "vcpu_quantity": 16,
+  "vsys_quantity": 1,
+  "subscriptions": ["ATP", "AURL", "AWF", "ADNS"],
+  "panorama": []
+}

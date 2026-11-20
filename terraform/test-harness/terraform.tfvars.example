@@ -1,0 +1,6 @@
+# cp terraform.tfvars.example terraform.tfvars   (gitignored)
+region    = "us-east-1"
+auth_code = "D1234567"
+pin_id    = "..."   # CSP > Assets > Device Certificates > Generate Registration PIN
+pin_value = "..."
+# alert_emails = ["you@example.com"]

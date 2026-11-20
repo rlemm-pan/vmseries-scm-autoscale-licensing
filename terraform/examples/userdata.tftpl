@@ -1,0 +1,12 @@
+%{ if use_secret_name ~}
+secret_name=${bootstrap_secret_name}
+%{ else ~}
+type=dhcp-client
+panorama-server=cloud
+dgname=${scm_folder}
+authcodes=${authcodes}
+vm-series-auto-registration-pin-id=${pin_id}
+vm-series-auto-registration-pin-value=${pin_value}
+mgmt-interface-swap=enable
+plugin-op-commands=aws-gwlb-inspect:enable,advance-routing:enable
+%{ endif ~}

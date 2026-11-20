@@ -1,0 +1,647 @@
+{
+  "info": {
+    "_postman_id": "ea05fd20-242c-5103-942a-28d690db9472",
+    "name": "NVIDIA VM-Series Auto-Scale Licensing (CSP + SCM)",
+    "description": "Validation collection for the Software NGFW Licensing API (auth code create, deactivate, delete) and the SCM device decommission workaround. Requests marked DESTRUCTIVE change licensing state, so only point them at a lab credit pool.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "CSP Licensing API",
+      "item": [
+        {
+          "name": "01 Get CSP token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{csp_token_url}}",
+            "description": "OAuth2 client credentials for the fwflex-service scope. The endpoint and format come from KB article kA14u000000XhzQCAS (the activation guide omits them): client_id/client_secret go in the form body.",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "client_id",
+                  "value": "{{csp_client_id}}"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{csp_client_secret}}"
+                },
+                {
+                  "key": "scope",
+                  "value": "fwflex-service"
+                },
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });",
+                  "const j = pm.response.json();",
+                  "pm.test(\"has access_token\", () => pm.expect(j.access_token).to.be.a(\"string\"));",
+                  "pm.collectionVariables.set(\"csp_token\", j.access_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 List credit pools",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "token",
+                "value": "{{csp_token}}"
+              }
+            ],
+            "url": "https://api.paloaltonetworks.com/tms/v1/creditPool",
+            "description": "Pick the creditPoolId for the profile."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });",
+                  "const d = pm.response.json().data || [];",
+                  "pm.test(\"has pools\", () => pm.expect(d.length).to.be.above(0));",
+                  "if (!pm.variables.get(\"credit_pool_id\") && d.length) pm.collectionVariables.set(\"credit_pool_id\", d[0].creditPoolId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "03 List deployment profiles in pool",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "token",
+                "value": "{{csp_token}}"
+              }
+            ],
+            "url": "https://api.paloaltonetworks.com/tms/v1/creditPool/{{credit_pool_id}}/deploymentProfile",
+            "description": "Existing profiles and their D- auth codes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04 Create deployment profile (auth code)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "token",
+                "value": "{{csp_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "https://api.paloaltonetworks.com/tms/v1/deploymentProfile",
+            "description": "CREATES an auth code and allocates credits. Returns auth_code (D-xxxxxxx).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"creditPoolId\": {{credit_pool_id}},\n  \"name\": \"{{profile_name}}\",\n  \"type\": \"VM\",\n  \"panOS\": \"10.0.4_or-above\",\n  \"firewallQuantity\": 1,\n  \"vSysQuantity\": 1,\n  \"vCpuQuantity\": 4,\n  \"panorama\": [],\n  \"subscriptions\": [\n    \"ATP\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });",
+                  "const j = pm.response.json();",
+                  "pm.test(\"success\", () => pm.expect(j.success).to.eql(true));",
+                  "pm.test(\"auth_code returned\", () => pm.expect(j.auth_code).to.match(/^D/));",
+                  "pm.collectionVariables.set(\"auth_code\", j.auth_code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "05 Get deployment profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "token",
+                "value": "{{csp_token}}"
+              }
+            ],
+            "url": "https://api.paloaltonetworks.com/tms/v1/deploymentProfile/{{auth_code}}",
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "06 List serials on auth code",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "token",
+                "value": "{{csp_token}}"
+              }
+            ],
+            "url": "https://api.paloaltonetworks.com/tms/v1/firewallserialnumbers?auth_code={{auth_code}}",
+            "description": "Firewalls currently licensed on the auth code."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });",
+                  "const v = pm.response.json().vm_series || [];",
+                  "if (v.length && !pm.variables.get(\"serial\")) pm.collectionVariables.set(\"serial\", v[0]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "07 Deactivate firewall",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "token",
+                "value": "{{csp_token}}"
+              }
+            ],
+            "url": "https://api.paloaltonetworks.com/tms/v1/firewall/deactivate?auth_code={{auth_code}}&serial_numbers={{serial}}",
+            "description": "DESTRUCTIVE: deactivates the license; credits return to the deployment profile. Comma-separate multiple serials."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });",
+                  "const j = pm.response.json();",
+                  "pm.test(\"no failures\", () => pm.expect(j.failed || []).to.be.empty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "08 Shrink profile (release pool credits)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "token",
+                "value": "{{csp_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "https://api.paloaltonetworks.com/tms/v1/deploymentProfile/{{auth_code}}",
+            "description": "Lower firewallQuantity so allocated credits return to the pool. The body must be the full profile.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"creditPoolId\": {{credit_pool_id}},\n  \"name\": \"{{profile_name}}\",\n  \"type\": \"VM\",\n  \"panOS\": \"10.0.4_or-above\",\n  \"firewallQuantity\": 1,\n  \"vSysQuantity\": 1,\n  \"vCpuQuantity\": 4,\n  \"panorama\": [],\n  \"subscriptions\": [\n    \"ATP\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "09 Delete deployment profile",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "token",
+                "value": "{{csp_token}}"
+              }
+            ],
+            "url": "https://api.paloaltonetworks.com/tms/v1/deploymentProfile/{{auth_code}}",
+            "description": "DESTRUCTIVE: deactivate all firewalls first."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });",
+                  "pm.test(\"isDeleted\", () => pm.expect(pm.response.json().isDeleted).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Strata Cloud Manager",
+      "item": [
+        {
+          "name": "01 Get SCM token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "https://auth.apps.paloaltonetworks.com/oauth2/access_token",
+            "description": "Service account, scope tsg_id:<tsg>.",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                },
+                {
+                  "key": "scope",
+                  "value": "tsg_id:{{scm_tsg_id}}"
+                }
+              ]
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{scm_client_id}}"
+                },
+                {
+                  "key": "password",
+                  "value": "{{scm_client_secret}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });",
+                  "pm.collectionVariables.set(\"scm_token\", pm.response.json().access_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 List devices",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{scm_token}}"
+              }
+            ],
+            "url": "https://api.strata.paloaltonetworks.com/config/setup/v1/devices?limit=200&offset=0",
+            "description": "Device `id` is a UUID; the serial is expected in `name` (or `serial_number`). Confirm against the first onboarded firewall; scm.py's device_serial() follows the same order."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });",
+                  "const r = pm.response.json(); const d = Array.isArray(r) ? r : (r.data || []);",
+                  "const s = pm.variables.get(\"serial\");",
+                  "const m = d.find(x => (x.serial_number || x.serial || x.name) === s);",
+                  "if (m) pm.collectionVariables.set(\"scm_device_id\", m.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "03 Move device to Decommissioned folder",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{scm_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "https://api.strata.paloaltonetworks.com/config/setup/v1/devices/{{scm_device_id}}",
+            "description": "Workaround for the missing public delete API.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"folder\": \"{{decommission_folder}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04 List folders",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{scm_token}}"
+              }
+            ],
+            "url": "https://api.strata.paloaltonetworks.com/config/setup/v1/folders?limit=200&offset=0",
+            "description": "The NGFW root folder ('All Firewalls' in the UI) is named ngfw-shared in the API."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "05 Create folder",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{scm_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "https://api.strata.paloaltonetworks.com/config/setup/v1/folders",
+            "description": "WRITES: creates the folder the ASG firewalls bootstrap into (dgname). Use `cli scm-setup` for idempotent creation of folders, snippets and variables.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{scm_folder}}\",\n  \"parent\": \"ngfw-shared\",\n  \"description\": \"VM-Series in the NVIDIA AWS ASG\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "06 Push candidate config to folder",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{scm_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "https://api.strata.paloaltonetworks.com/config/operations/v1/config-versions/candidate:push",
+            "description": "WRITES: pushes pending config to the folder. Returns job_id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"folders\": [\n    \"{{scm_folder}}\"\n  ],\n  \"description\": \"postman push\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });",
+                  "const j = pm.response.json(); if (j.job_id) pm.collectionVariables.set(\"scm_job_id\", j.job_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "07 Get push job",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{scm_token}}"
+              }
+            ],
+            "url": "https://api.strata.paloaltonetworks.com/config/operations/v1/jobs/{{scm_job_id}}",
+            "description": "Poll until status_str is FIN."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "08 List tenant service instances",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{scm_token}}"
+              }
+            ],
+            "url": "https://api.sase.paloaltonetworks.com/subscription/v1/instances",
+            "description": "Service instances on the TSG. Associating an SCM Pro deployment profile updates strata_cloud_manager, logging_service and ademx (see _internal.updated_at). `cli link-status` shows this next to the CSP profile status."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "// TMS returns HTTP 200 with {\"status\":400,\"error\":...} on failures, so check the body too",
+                  "pm.test(\"no error envelope\", () => { const b = pm.response.json(); pm.expect(b && b.error && b.status >= 400, b && b.message).to.not.be.ok; });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "csp_token_url",
+      "value": "https://identity.paloaltonetworks.com/as/token.oauth2"
+    },
+    {
+      "key": "csp_token",
+      "value": ""
+    },
+    {
+      "key": "profile_name",
+      "value": "nvidia-poc-asg"
+    },
+    {
+      "key": "auth_code",
+      "value": ""
+    },
+    {
+      "key": "serial",
+      "value": ""
+    },
+    {
+      "key": "scm_token",
+      "value": ""
+    },
+    {
+      "key": "scm_device_id",
+      "value": ""
+    },
+    {
+      "key": "scm_job_id",
+      "value": ""
+    },
+    {
+      "key": "scm_folder",
+      "value": "AWS-NVIDIA-GWLB"
+    },
+    {
+      "key": "decommission_folder",
+      "value": "Decommissioned"
+    }
+  ]
+}
