@@ -1,8 +1,13 @@
-# Prerequisites: automated VM-Series licensing and SCM onboarding in an AWS Auto Scaling Group
+# Prerequisites: automated VM-Series licensing and SCM onboarding in AWS and Azure scale groups
 
-This is everything that has to be in place before scale-out and scale-in run without manual steps.
+This is everything that has to be in place before scale-out and scale-in run without manual steps,
+for an **AWS Auto Scaling Group (ASG)** or an **Azure Virtual Machine Scale Set (VMSS)**. Both were
+verified end to end. Sections 1, 2, 4 and 5 apply to both clouds; use **section 3 for AWS** or
+**section 3a for Azure**. "Scale group" below means the ASG or the VMSS.
+
 Items marked **(UI, one time)** have no public API and are done once per deployment, not per firewall.
-Everything else is automated by this repository (Terraform + Python CLI + two Lambdas).
+Everything else is automated by this repository (Terraform + Python CLI + two Lambdas on AWS, or one
+timer Function on Azure).
 
 ---
 
@@ -11,9 +16,9 @@ Everything else is automated by this repository (Terraform + Python CLI + two La
 | # | Prerequisite | Notes |
 |---|---|---|
 | 1.1 | **CSP account** with a role that can manage Software NGFW credits and device certificates (for example Super User or Standard User) | The same account must own the credit pool, the deployment profile and the registration PIN. |
-| 1.2 | **Software NGFW credit pool**, active and not expired | Size it for the ASG maximum: firewalls × vCPU per firewall, plus subscriptions and SCM Pro. Credits are only consumed while a firewall is licensed. |
+| 1.2 | **Software NGFW credit pool**, active and not expired | Size it for the scale group maximum: firewalls × vCPU per firewall, plus subscriptions and SCM Pro. Credits are only consumed while a firewall is licensed. |
 | 1.3 | **OAuth client for the Licensing API** | CSP → Account Management → OAuth API Management → scope **`fwflex-service`** → Create OAuth Credentials. Store the client ID and secret key in AWS Secrets Manager. |
-| 1.4 | **A deployment profile (auth code) dedicated to this ASG** | Created by `cli create`. Set `firewallQuantity` to the ASG maximum and vCPU to match the instance type. Don't share this auth code with firewalls outside the ASG: the reconciler treats unknown serials on it as orphans. |
+| 1.4 | **A deployment profile (auth code) dedicated to each scale group** | Created by `cli create`. Set `firewallQuantity` to the scale group maximum and vCPU to match the instance type. Don't share this auth code with firewalls outside the scale group: the reconciler treats unknown serials on it as orphans. |
 | 1.5 | **Strata Cloud Manager Pro on the profile** **(UI, one time)** | The Licensing API has no subscription code for SCM Pro. Edit the profile in the CSP and select Strata Cloud Manager Pro. Without it the firewall gets SCM Essentials. |
 | 1.6 | **Device-certificate registration PIN** **(UI, renewed before expiry)** | CSP → Assets → Device Certificates → Generate Registration PIN. The PIN ID and value go in the bootstrap. Firewalls can't get a device certificate, and so can't connect to SCM, without it. Choose a long expiry and plan rotation: new firewalls fail to onboard once the PIN expires. |
 
@@ -25,7 +30,7 @@ Everything else is automated by this repository (Terraform + Python CLI + two La
 | 2.2 | **Deployment profile associated with the tenant** **(UI, one time; critical)** | CSP → Software NGFW Credits → profile → **Finish SetUp** (or hub → Common Services → Subscriptions & Add-ons → Ready for Activation → **Activate Now**). Select the tenant, **tick the deployment profile**, agree and Activate. Wait for hub → Tenant Management → Deployment Profiles to show the association **Complete** (15–50 minutes; if it stays "Associating" for hours, open a case). Verified in the lab: once Complete, a new firewall was in the tenant the minute it licensed and in SCM 2 minutes later. The CSP profile status may stay `Updated`, so don't rely on it. **This is what makes scale-out hands-free:** only then are new firewalls added to the tenant and associated with SCM automatically. Without it, firewalls license and boot but never appear in SCM until someone adds each one by hand in Device Associations. `cli link-status <auth_code>` checks this. |
 | 2.3 | **Consistent SCM tier across the tenant** | A tenant can't mix profiles on SCM Pro with profiles on Strata Logging Service only or on no subscription. Activating a Pro profile on a tenant that already has other profiles can dissociate their firewalls. Check before activating on a shared tenant. |
 | 2.4 | **SCM service account** | Hub → Common Services → Identity & Access → Add Identity → Service Account. It needs a role that can edit configuration (folders, snippets, variables, devices, push) and read subscriptions. Provides a client ID, client secret and TSG ID (the TSG ID is inside the client ID: `name@<TSG>.iam.panserviceaccount.com`). Store them in AWS Secrets Manager. |
-| 2.5 | **SCM folders: one for the ASG, plus `Decommissioned`** | Created by `cli scm-setup`. The ASG folder name must match `dgname` in the bootstrap. |
+| 2.5 | **SCM folders: one per scale group, plus `Decommissioned`** | Created by `cli scm-setup`. The scale group's folder name must match `dgname` in the bootstrap. |
 | 2.6 | **Firewall configuration in the folder** | Interfaces, zones, routing and security policy for the GWLB design, in the folder or attached snippets. `scm-setup` creates the containers; the content is the customer's design. |
 | 2.7 | **Review existing onboarding rules** | A catch-all onboarding rule can place new firewalls in another folder. The bootstrap `dgname` takes precedence, but check the rules on shared tenants. |
 
@@ -64,13 +69,15 @@ so licenses are released up to that long after a VM is deleted.
 
 | Topic | What to expect |
 |---|---|
-| Timing | Measured in the lab: boot to license about 10 minutes, in SCM 2 minutes later, threat content about 7 minutes after that, first successful config push about 20 minutes after launch. Size scale-out alarms with that in mind. |
+| Timing | Measured in the labs: boot to license about 10 minutes, in SCM about 2 minutes later, threat content about 7 minutes after that, first successful config push about 20 minutes after launch (AWS and Azure were similar). Size scale-out alarms with that in mind. |
 | First config push | A freshly booted firewall has no threat content yet, and config that references content objects (for example URL categories) fails to commit. `scm-push` waits for content and checks the per-firewall push result. |
-| Scale-in | The termination hook holds the instance, the Lambda deactivates the license and moves the SCM device to `Decommissioned`, then the instance is released. Scale-in never blocks termination; failures raise an SNS alert, and the reconciler retries. |
+| Scale-in (AWS) | The termination hook holds the instance, the Lambda deactivates the license and moves the SCM device to `Decommissioned`, then the instance is released. Scale-in never blocks termination; failures raise an SNS alert, and the reconciler retries. |
+| Scale-in (Azure) | Azure has no termination hook. The VM is deleted right away; the lifecycle Function notices on its next run (every 2 minutes by default), deactivates the license and moves the SCM device. Verified: deactivated within about 30 seconds of the delete in the lab. |
+| Leftover disks | AWS: set the launch template's root volume to `delete_on_termination = true` (see 3.5). Azure: Flexible scale sets delete the OS disk and NICs with the VM (verified). |
 | Credits | Deactivation returns credits to the deployment profile, not the pool (confirmed). To free pool credits, lower the profile's firewall count (`cli resize`). |
-| Reconciler | Starts in dry-run. Enable deactivation of orphaned licenses after validating in your environment. |
+| Reconciler / orphans | Starts in dry-run (AWS reconciler and Azure Function). Enable deactivation of orphaned licenses after validating in your environment. |
 | Device cleanup in SCM | Automatic for firewalls added through the linked deployment profile: after scale-in deactivates the license, the device is removed from the tenant and SCM within a couple of minutes (verified). Only firewalls added by hand would need cleanup in hub → Device Associations. |
-| PIN rotation | Regenerate the registration PIN before it expires and update the bootstrap secret and launch template. |
+| PIN rotation | Regenerate the registration PIN before it expires and update the bootstrap (AWS launch template user data and bootstrap secret; Azure scale set custom data). |
 
 ## 5. Summary of one-time UI steps (no public API)
 
