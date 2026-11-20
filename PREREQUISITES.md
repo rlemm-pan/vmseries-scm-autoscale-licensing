@@ -43,6 +43,23 @@ Everything else is automated by this repository (Terraform + Python CLI + two La
 | 3.8 | **Two Secrets Manager secrets** | API credentials (CSP OAuth client and SCM service account) and PAN-OS bootstrap values. Terraform creates the containers; the values are loaded separately so they stay out of Terraform state. |
 | 3.9 | **Tooling for deployment** | Terraform 1.5 or later with AWS provider 6.x, and Python 3.9 or later for the CLI. |
 
+## 3a. Azure (instead of section 3)
+
+| # | Prerequisite | Notes |
+|---|---|---|
+| 3a.1 | **Subscription with Owner** (or Contributor + User Access Administrator) | Terraform assigns roles to the Function's managed identity. |
+| 3a.2 | **Resource providers registered** | `Microsoft.Compute`, `Microsoft.Network`, `Microsoft.Web`, `Microsoft.App` (Flex VNet integration; easy to miss), `Microsoft.KeyVault`, `Microsoft.Storage`, `Microsoft.Insights`, `Microsoft.ManagedIdentity`. |
+| 3a.3 | **Marketplace terms for `paloaltonetworks:vmseries-flex:byol`** | Accept once per subscription (`az vm image terms accept`). |
+| 3a.4 | **vCPU quota** for the VM size family in the region | Tested with Standard_D4s_v5. Check per-zone restrictions (`az vm list-skus`). |
+| 3a.5 | **VM-Series Flexible-orchestration scale set** (customer-owned) | Management NIC first, data NIC(s) after. Bootstrap keys in **custom data**, `;`-separated: `type=dhcp-client;panorama-server=cloud;dgname=<SCM folder>;authcodes=<D-code>;vm-series-auto-registration-pin-id=…;vm-series-auto-registration-pin-value=…`. |
+| 3a.6 | **Outbound internet** from the management subnet (NAT gateway) | Same destinations as 3.6. |
+| 3a.7 | **Function VNet-integration subnet** | Delegated to `Microsoft.App/environments`, service endpoints `Microsoft.Storage` and `Microsoft.KeyVault`, with NAT for outbound (licensing, SCM and ARM APIs). Needed because tenant policies often require storage accounts to deny public network access. |
+| 3a.8 | **No dedicated App Service quota needed** | The Function runs on the Flex Consumption plan. |
+| 3a.9 | **Tooling** | Terraform 1.5 or later with azurerm 4.x/5.x, Azure CLI signed in (browser login; device-code login is often blocked by Conditional Access), curl, Python 3.9 or later. |
+
+Azure scale-in is detected, not intercepted: the lifecycle Function runs every 2 minutes (configurable),
+so licenses are released up to that long after a VM is deleted.
+
 ## 4. Operational expectations
 
 | Topic | What to expect |
@@ -60,7 +77,7 @@ Everything else is automated by this repository (Terraform + Python CLI + two La
 1. Select Strata Cloud Manager Pro on the deployment profile (CSP).
 2. Associate the deployment profile with the SCM tenant, ticking the profile, and wait for **Complete** (CSP Finish SetUp / hub).
 3. Generate the registration PIN (CSP), and renew it before it expires.
-4. Subscribe to the VM-Series BYOL AMI (AWS Marketplace).
+4. Subscribe to the VM-Series BYOL image (AWS Marketplace, or accept the Azure Marketplace terms).
 5. Only if a firewall was ever added by hand: remove it from the tenant in hub Device Associations. Profile-added firewalls are cleaned up automatically.
 
 Everything else (deployment profile creation, SCM folders and snippets, bootstrap secrets, lifecycle

@@ -1,0 +1,5 @@
+# cp terraform.tfvars.example terraform.tfvars   (gitignored)
+subscription_id = "00000000-0000-0000-0000-000000000000"
+auth_code       = "D1234567"
+pin_id          = "..."   # CSP > Assets > Device Certificates > Generate Registration PIN
+pin_value       = "..."

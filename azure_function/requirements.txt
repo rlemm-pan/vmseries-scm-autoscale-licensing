@@ -1,0 +1,2 @@
+# azure-functions is provided by the Functions Python worker; listed for local tooling/remote build.
+azure-functions

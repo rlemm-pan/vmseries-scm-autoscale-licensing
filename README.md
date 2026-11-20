@@ -1,7 +1,8 @@
 # NVIDIA VM-Series Auto-Scale Licensing Automation (POC)
 
 This is an "art of the possible" reference for automating the VM-Series license lifecycle in an
-AWS Auto Scaling Group (ASG) managed by Strata Cloud Manager (SCM):
+AWS Auto Scaling Group (ASG) or an Azure Virtual Machine Scale Set (VMSS), managed by Strata Cloud
+Manager (SCM). Both clouds were verified end to end; see [Azure](#azure) for the Azure specifics.
 
 | Lifecycle | What happens | Implemented by |
 |---|---|---|
@@ -28,12 +29,17 @@ src/vmseries_lifecycle/
   csp.py         Software NGFW Licensing API: pools, profiles, serials, deactivate, resize, teardown
   scm.py         SCM: devices (find/move/status), folders/snippets/variables, config push + jobs, tenant licenses
   aws.py         boto3 helpers (secrets, tags, lifecycle, SNS)
+  azure.py       Azure ARM/Key Vault/blob helpers (stdlib; managed identity or az CLI token)
   config.py      Lambda wiring (env vars + Secrets Manager)
   cli.py         operator CLI
-  handlers/scale_in.py, handlers/reconcile.py
-terraform/       lifecycle hook, EventBridge, 2 Lambdas, IAM, secrets, SNS (attaches to an existing ASG)
+  handlers/scale_in.py, handlers/reconcile.py      (AWS)
+  handlers/azure_lifecycle.py                      (Azure)
+terraform/       AWS: lifecycle hook, EventBridge, 2 Lambdas, IAM, secrets, SNS (attaches to an existing ASG)
+terraform-azure/ Azure: Flex Consumption Function, Key Vault, locked-down storage, roles (attaches to an existing VMSS)
+azure_function/  Azure Functions entry point (Python v2 model)
+scripts/         azure-deploy-function.sh (Function code deployment)
 postman/         request-by-request API validation collection (CSP + SCM)
-tests/           offline unit tests (fake HTTP + fake AWS)
+tests/           offline unit tests (fake HTTP, fake AWS, fake Azure)
 examples/profile-spec.json   deployment profile (CSP)
 examples/scm-setup.json      SCM folders, snippets, variables
 ```
@@ -192,6 +198,39 @@ postman collection run postman/nvidia-vmseries-licensing.postman_collection.json
 CSP requests 04 and 07–09 **change licensing state**; run them only against a lab pool. SCM requests
 03, 05 and 06 **write to the tenant**. Regenerate the collection with `python3 postman/generate.py`.
 
+## Azure
+
+The licensing and SCM half (`csp.py`, `scm.py`, the CLI, profile association, `dgname` folders) is
+identical on Azure. Only the cloud automation differs:
+
+| AWS | Azure |
+|---|---|
+| ASG + launch template user data | **Flexible-orchestration** VMSS, same bootstrap keys in **custom data**, `;`-separated |
+| Termination lifecycle hook → EventBridge → `scale_in` Lambda | **No hook exists**: a timer Function (`azure_lifecycle`, every 2 min) detects deleted VMs from its serial map and deactivates them. Deactivation doesn't need the VM, so acting after the delete is fine. |
+| `reconcile` Lambda (EventBridge schedule) | Same timer Function: maps VM → serial (mgmt IP → SCM), tags `paloalto-serial`, reports orphans |
+| Secrets Manager | Key Vault (RBAC) |
+| EC2 tags | VM tags, plus a blob `serial-map` (a deleted VM's tags are gone with it) |
+
+```bash
+cd terraform-azure/test-harness && cp terraform.tfvars.example terraform.tfvars   # lab only
+az login                                   # browser flow; device-code login may be blocked by Conditional Access
+terraform init && terraform apply
+# load the API-credentials JSON into Key Vault secret "api-credentials" (same JSON as the AWS secret)
+az vmss scale -g <rg> -n <vmss> --new-capacity 1
+```
+
+Lessons from the Azure lab (all handled in `terraform-azure/`):
+- **Flex Consumption plan (FC1)** for the Function: the lab subscription had **0 App Service B1 quota**, and FC1
+  needs no dedicated-instance quota.
+- **Storage must be network-restricted** (tenant policy *"Storage accounts should restrict network access"*):
+  the storage account denies public access and is reachable only from the Function's VNet-integration subnet
+  (service endpoints). The provider's storage data-plane calls are disabled for this reason.
+- **`Microsoft.App` must be registered**: Flex VNet integration runs through it. Without it the Function App
+  create is retried until timeout. The harness registers it.
+- **Code deployment is a separate step** (`scripts/azure-deploy-function.sh`, run by Terraform): the provider's
+  `zip_deploy_file` failed on Flex with "waiting for deployment service to be ready: 404".
+- **Flexible VMSS deletes the OS disk and NICs with the VM**, so nothing was left behind (unlike the AWS AMI's root volume).
+
 ## Design decisions
 
 - **One dedicated auth code per ASG.** Every instance in the ASG bootstraps with the same D- code,
@@ -326,6 +365,17 @@ Boot to SCM-managed took **12 minutes**, and boot to config-pushed about 20, wit
 hub or SCM. For profile-added firewalls, license deactivation also triggers automatic removal from the
 tenant and SCM about 2 minutes later, so `Decommissioned` is only a short-lived parking spot.
 
+## End-to-end lab test: Azure (2026-11-20, eastus2, `terraform-azure/test-harness`)
+
+| Step | Result | Time (UTC) |
+|---|---|---|
+| VMSS created (PAN-OS 11.2.15, Standard_D4s_v5, custom-data bootstrap) | VM running | 16:46 |
+| License, tenant auto-add, SCM | licensed, `source: deployment-profile`, connected in the `dgname` folder | by 16:55 |
+| Lifecycle Function (after the Flex/policy fixes above) | VM tagged `paloalto-serial`, serial-map record written | 17:56 |
+| `scm-push --wait` | parent CommitAndPush `OK` and per-firewall CommitAll `OK` | 17:58 |
+| VMSS 1 → 0 | VM deleted; the Function's next run deactivated the serial and moved the device to `Decommissioned` | 17:59 → 18:00 |
+| Leftovers | no disks or NICs remained | 18:00 |
+
 ## Status
 
 - **CSP Licensing API: working live.** Token, pools, profiles, create, serials and deactivate (through
@@ -336,6 +386,7 @@ tenant and SCM about 2 minutes later, so `Decommissioned` is only a short-lived 
   tagging (see the end-to-end table above).
 - **Deployment profile → tenant link:** done manually with SCM Pro on 2026-11-19 (credits allocated went
   from 740.10 to 853.38). `link-status` shows the supporting evidence; there's no API to confirm it outright.
-- Python library, CLI and Lambdas: 31 offline unit tests pass (Python 3.9; Lambda targets 3.12).
+- **Azure: working live.** Flexible VMSS bootstrap, Flex Consumption Function (map, tag, detect-and-deactivate), Key Vault, serial map.
+- Python library, CLI, Lambdas and the Azure handler: 45 offline unit tests pass (Python 3.9 and 3.15; Lambda targets 3.12, the Azure Function 3.11).
 - Terraform: the module and `test-harness/` were applied to a lab AWS account (Terraform 1.17,
   AWS provider 6.x).
